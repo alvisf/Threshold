@@ -6,6 +6,7 @@ import { derive } from './logic/derive';
 import { DAY } from './logic/time';
 import { notifyBucket } from './notify';
 import { data, housekeeping, load, meta, patchToday, profile, ready, refreshPressure, toast, useStore } from './store';
+import { installSync, syncConfig } from './sync';
 import { useNow } from './ui';
 import { AttackMode } from './views/AttackMode';
 import { CheckInSheet } from './views/CheckInView';
@@ -28,6 +29,7 @@ const isStandalone = () => matchMedia('(display-mode: standalone)').matches || (
 
 function Banners() {
   const m = useStore(meta);
+  const sync = useStore(syncConfig);
   const out = [];
   if (isIOS && !isStandalone() && !m.installDismissed) {
     out.push(
@@ -37,7 +39,7 @@ function Banners() {
       </div>,
     );
   }
-  if (Date.now() - Math.max(m.firstUse, m.lastExport, m.exportSnooze) > 30 * DAY) {
+  if (!sync.enabled && Date.now() - Math.max(m.firstUse, m.lastExport, m.exportSnooze) > 30 * DAY) {
     out.push(
       <div className="banner" key="export">
         <span>Back up your logs.</span>
@@ -71,7 +73,7 @@ export default function App() {
 
   useEffect(() => {
     if (!localStorage.getItem('threshold.profile')) profile.set((x) => x);
-    load().then(() => refreshPressure());
+    load().then(() => { void refreshPressure(); installSync(); });
     const id = setInterval(() => { housekeeping(); refreshPressure(); }, 60_000);
     return () => clearInterval(id);
   }, []);

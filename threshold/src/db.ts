@@ -55,3 +55,6 @@ export const replaceAll = (data: AppData) =>
       (data[n] as object[]).forEach((r) => s.put(r));
     }
   });
+
+export const deleteRecords = (name: Coll, ids: readonly string[]) =>
+  tx([name], 'readwrite', (t) => { const s = t.objectStore(name); ids.forEach((id) => s.delete(id)); });

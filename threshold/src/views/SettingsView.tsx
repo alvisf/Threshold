@@ -5,6 +5,7 @@ import { itemLabel, toSlug } from '../logic/time';
 import { roundCoord } from '../logic/weather';
 import { Icon } from '../icons';
 import { askPermission, canNotify } from '../notify';
+import { setSyncEnabled, syncConfig, syncNow, useSyncStatus } from '../sync';
 import { DEFAULT_PROFILE, data, flash, meta, profile, refreshPressure, replaceData, useStore, wipeAll } from '../store';
 import { Card, Switch } from '../ui';
 
@@ -53,8 +54,37 @@ export function exportBackup() {
   meta.set((m) => ({ ...m, lastExport: Date.now() }));
 }
 
+function SyncCard() {
+  const c = useStore(syncConfig);
+  const st = useSyncStatus();
+  const set = (patch: Partial<typeof c>) => syncConfig.set((x) => ({ ...x, ...patch }));
+  const toggle = (on: boolean) => {
+    if (on && (!c.token || !c.baseId)) { flash('Add a token and a base ID first.'); return; }
+    setSyncEnabled(on);
+  };
+  const waiting = st.pending ? ` · ${st.pending} waiting` : '';
+  const status = st.state === 'off' ? 'Off'
+    : st.state === 'syncing' ? 'Syncing…'
+    : st.state === 'error' ? `Error: ${st.error}${waiting}`
+    : `${st.at ? `Synced ${new Date(st.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'On'}${waiting}`;
+  return (
+    <Card title="Airtable sync">
+      <input className="other" type="password" autoComplete="off" autoCapitalize="off" spellCheck={false}
+        value={c.token} placeholder="Token (pat…)" aria-label="Airtable token" onChange={(e) => set({ token: e.target.value.trim() })} />
+      <input className="other" autoComplete="off" autoCapitalize="off" spellCheck={false}
+        value={c.baseId} placeholder="Base ID (app…)" aria-label="Airtable base ID" onChange={(e) => set({ baseId: e.target.value.trim() })} />
+      <Switch label="Sync" checked={c.enabled} onChange={toggle} />
+      <div className="row">
+        <span className={st.state === 'error' ? 'note' : 'muted'} role="status">{status}</span>
+        <button type="button" disabled={!c.enabled || st.state === 'syncing'} onClick={() => { void syncNow(); }}>Sync now</button>
+      </div>
+    </Card>
+  );
+}
+
 export function SettingsView() {
   const p = useStore(profile);
+  const sync = useStore(syncConfig);
   const file = useRef<HTMLInputElement>(null);
   const [locating, setLocating] = useState(false);
 
@@ -90,7 +120,7 @@ export function SettingsView() {
   };
 
   const wipe = async () => {
-    if (!window.confirm('Delete every log, episode and setting on this phone? This cannot be undone.')) return;
+    if (!window.confirm(sync.enabled ? 'Delete every log and setting on this phone and in Airtable? This cannot be undone.' : 'Delete every log, episode and setting on this phone? This cannot be undone.')) return;
     await wipeAll();
     profile.set({ ...DEFAULT_PROFILE });
     flash('All data deleted.');
@@ -125,6 +155,8 @@ export function SettingsView() {
         {canNotify() && Notification.permission === 'denied' && <p className="note">Alerts are blocked in phone settings.</p>}
       </Card>
 
+      <SyncCard />
+
       <Card title="Data">
         <div className="actions three">
           <button type="button" onClick={exportBackup}>Export</button>
@@ -134,7 +166,7 @@ export function SettingsView() {
         <input ref={file} type="file" accept="application/json,.json" hidden onChange={(e) => importFile(e.target.files?.[0])} />
       </Card>
 
-      <p className="fine">Not medical advice. Data stays on this phone.</p>
+      <p className="fine">Not medical advice. {sync.enabled ? 'Data stays on this phone and in your Airtable base.' : 'Data stays on this phone.'}</p>
     </div>
   );
 }

@@ -16,7 +16,7 @@ export interface Store<T> {
   subscribe(l: () => void): () => void;
 }
 
-function createStore<T>(initial: T, persistKey?: string, merge?: (saved: unknown) => T): Store<T> {
+export function createStore<T>(initial: T, persistKey?: string, merge?: (saved: unknown) => T): Store<T> {
   let value = initial;
   if (persistKey) {
     try {
@@ -59,7 +59,7 @@ export interface Meta {
   installDismissed: boolean;
 }
 
-const asObj = (x: unknown) => (typeof x === 'object' && x !== null ? (x as Record<string, unknown>) : {});
+export const asObj = (x: unknown) => (typeof x === 'object' && x !== null ? (x as Record<string, unknown>) : {});
 
 export const profile = createStore<UserProfile>(DEFAULT_PROFILE, 'threshold.profile', (s) => ({ ...DEFAULT_PROFILE, ...asObj(s) }));
 export const meta = createStore<Meta>(
@@ -78,9 +78,17 @@ export function flash(text: string) {
 
 type Rec<K extends db.Coll> = AppData[K][number];
 
+/** Sync listens here. Called after a local write only, never for records that came from Airtable. */
+export interface WriteHook {
+  put(coll: db.Coll, recs: readonly object[]): void;
+  /** Called before everything is deleted, so sync can mark each record deleted. */
+  wipe(): void;
+}
+let hook: WriteHook | null = null;
+export const setWriteHook = (h: WriteHook | null) => { hook = h; };
+
 /** Write-through: update memory first so the UI is instant, then IndexedDB. */
-export function upsert<K extends db.Coll>(coll: K, recs: Rec<K>[]) {
-  if (!recs.length) return;
+function write<K extends db.Coll>(coll: K, recs: Rec<K>[]): Promise<void> {
   const k = db.KEYS[coll];
   const idOf = (r: unknown) => (r as Record<string, unknown>)[k];
   data.set((d) => {
@@ -92,7 +100,23 @@ export function upsert<K extends db.Coll>(coll: K, recs: Rec<K>[]) {
     });
     return { ...d, [coll]: [...list, ...incoming.values()] };
   });
-  db.putRecords(coll, recs as object[]).catch(() => flash('Could not save. Storage is full or blocked.'));
+  return db.putRecords(coll, recs as object[]).catch(() => flash('Could not save. Storage is full or blocked.'));
+}
+
+export function upsert<K extends db.Coll>(coll: K, recs: Rec<K>[]) {
+  if (!recs.length) return;
+  void write(coll, recs);
+  hook?.put(coll, recs);
+}
+
+/** Records that came from Airtable: saved like any other, but not sent back. */
+export const applyRemote = write;
+
+export function removeLocal(coll: db.Coll, ids: readonly string[]): Promise<void> {
+  const k = db.KEYS[coll];
+  const gone = new Set(ids);
+  data.set((d) => ({ ...d, [coll]: (d[coll] as object[]).filter((r) => !gone.has(String((r as Record<string, unknown>)[k]))) }));
+  return db.deleteRecords(coll, ids).catch(() => flash('Could not save. Storage is full or blocked.'));
 }
 
 export async function load() {
@@ -173,12 +197,15 @@ export async function refreshPressure(force = false) {
 }
 
 export async function wipeAll() {
+  hook?.wipe();
   data.set(EMPTY_DATA);
   await db.replaceAll(EMPTY_DATA);
 }
 
 export async function replaceData(next: AppData) {
+  hook?.wipe();
   data.set(next);
   await db.replaceAll(next);
+  (Object.keys(db.KEYS) as db.Coll[]).forEach((c) => hook?.put(c, next[c]));
   housekeeping();
 }
